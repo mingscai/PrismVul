@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.ipynb_checkpoints/
+
+# Build artifacts (gumtree differ)
+data_processing/gumtree_differ/app/bin/
+data_processing/gumtree_differ/app/build/
+data_processing/gumtree_differ/.gradle/
+data_processing/gumtree_differ/build/
+*.class
+
+# IDE
+.vscode/
+.idea/
+.settings/
+*.prefs
+.classpath
+.project
+.DS_Store
+
+# Local data / models / runtime artifacts — not part of the code release
+data/
+cache/
+logs/
+results/
+worktrees/
+models/
+*.jsonl
+*.npy
+*.db
