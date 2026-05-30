@@ -1,56 +1,90 @@
 # PrismVul
 
-Code artifact for the paper *PrismVul: a benchmark for vulnerable-function localization in large software projects*.
-
-This repository contains (1) the benchmark-construction pipeline that builds the dataset from public CVE/issue-tracker/commit sources, and (2) the evaluation harness for the four technique families studied in the paper (statistical, machine learning, code retrieval, agentic LLM).
-
-> **Anonymized artifact.** This repository is released for double-blind review. Author identity, institution, and any non-anonymous hosting links have been removed.
+The repository has two halves: **`data_processing/`** builds the benchmark from
+public CVE / issue-tracker / commit sources, and **`evaluation/`** runs the four
+technique families studied in the paper (statistical, machine learning, code
+retrieval, agentic LLM) against the constructed benchmark.
 
 ## Layout
 
 ```
-data_processing/      Benchmark construction pipeline (run scripts in numeric order, 01 → 25)
-  01-05   download CVE records from MITRE / NVD / CVEDetails
-  06      project-specific CVE selection (Chromium and other projects)
-  07      CWE-Representative resolution
-  08-11   CVE -> issue-tracker link discovery + content fetch
-  12-13   fix-commit discovery + validation
-  14-19   diff extraction, GumTree AST diff
-  20-23   NLP on CVE descriptions (anchor masking, restatement, structuring, issue summarization)
-  24      vulnerable-function identification (two-stage LLM classification)
-  25      commit-chain materialization
-  gumtree_differ/     Java (Gradle) AST-diff tool used by scripts 14-19
-
+data_processing/    Benchmark construction pipeline (01 → 25) + gumtree_differ/
 evaluation/
-  scripts/            Method drivers, grouped by technique family (i-iv):
-                        i             statistical (CWE-frequency)
-                        ii_a, ii_b    machine learning (TF-IDF kNN, decision tree)
-                        iii_a, iii_b  code retrieval (BM25, dense embedding)
-                        iv_a, iv_b    agentic LLM (zero-shot, in-context retrieval)
-  utils/              Shared library: dataset I/O, fuzzy function matching,
-                      metrics, the agent runtime, the C/C++ parser.
-  precompute/         GT index, train/val/test split, the function corpus and
-                      the historical-CVE RAG index.
-  configs/agent_prompts/   System + task prompt templates for the agentic family.
+  precompute/       Splits, GT index, retrieval corpora (run before any baseline)
+  scripts/          Baseline drivers, grouped by technique family (i → iv)
+  utils/            Shared library: dataset I/O, function matching, metrics,
+                    agent runtime, C/C++ parser
+  configs/agent_prompts/   System + task prompt templates for the agentic family
 ```
 
-## Data
+## Benchmark construction (`data_processing/`)
 
-The constructed benchmark (CVE records, commit chains, ground-truth vulnerable
-functions) and the precomputed retrieval corpus are **not** included in this
-repository because of size. They are released as a separate archive; see the
-data-availability statement in the paper. Each pipeline / evaluation script
-documents the input/output JSONL schema it expects in its module docstring, so
-the dataset can also be regenerated from scratch by running `data_processing/`
-in numbered stage order against the public source projects.
+Scripts are numbered and run in order; each reads the JSONL produced by the
+previous stage and writes the next. The pipeline progressively turns raw CVE
+records into a dataset of vulnerabilities annotated with their ground-truth
+vulnerable functions.
 
-Two large external dependencies are also required and must be obtained
-separately:
+1. **Collect CVEs (01–05).** Download CVE records from MITRE / NVD / CVEDetails,
+   merge the sources into one entry per CVE, and backfill missing CWE info.
+2. **Select & classify (06–07).** Keep the target project's CVEs (Chromium) and
+   resolve each to its representative CWE.
+3. **CVE → issue → fix commit (08–13).** Follow references to the issue tracker,
+   resolve redirects, fetch issue content, extract the fix commit(s) from each
+   issue, and validate that those commits exist upstream.
+4. **Extract the fix diff (14–19).** Pull diff metadata from each fix commit,
+   download the changed files, keep C/C++ only, strip comments, run the GumTree
+   AST differ (`gumtree_differ/`) to get function-level edits, and merge the
+   resulting changed functions back into each CVE record.
+5. **Process descriptions (20–23).** NLP on the CVE text: mask answer-leaking
+   anchors, restate the masked description, structure it into fields, and
+   summarize the linked issue report.
+6. **Label & assemble (24–25).** A two-stage LLM classifies the changed
+   functions into vulnerable vs. supporting (the ground truth), then commit
+   chains are materialized into the final per-instance records.
 
-- a local clone of the target project repository (e.g. Chromium) for the
-  agentic baselines — pass its path via `--repo-path`;
-- the dense retriever / reranker checkpoints (`CodeRankEmbed`, `CodeRankLLM`)
-  for the code-retrieval baselines — downloadable from their public model hubs.
+The C/C++ AST differ in `gumtree_differ/` (used by stage 18) is a separate Java
+project; build it once with `cd data_processing/gumtree_differ && ./gradlew build`.
+
+## Evaluation (`evaluation/`)
+
+First run the **`precompute/`** steps once to produce the inputs every baseline
+shares: `build_splits.py` (train/val/test), `build_gt.py` (ground-truth index),
+`build_function_corpus.py` (the function database for the retrieval baselines),
+and `build_rag_corpus.py` (the historical-CVE corpus for the in-context agent).
+
+Each **`scripts/`** driver then loads the dataset and a split, runs one method
+over the test instances, and writes predictions + metrics under `results/`. The
+four technique families are:
+
+- **i — statistical.** `i_cwe_freq` ranks functions by how often their CWE class
+  co-occurs with them in the training split.
+- **ii — machine learning.** `ii_a_tfidf_knn` (TF-IDF nearest neighbours) and
+  `ii_b_decision_tree` (a learned classifier over hand-crafted features).
+- **iii — code retrieval.** `iii_a_bm25` (lexical) and `iii_b_coderankembed`
+  (dense embeddings) retrieve candidate functions from the function corpus given
+  the CVE description.
+- **iv — agentic LLM.** `iv_a_agent` lets an LLM explore the checked-out repo
+  with shell tools to locate the vulnerable functions; `iv_b_agent_icl` adds the
+  historical-CVE corpus as an in-context retrieval resource.
+
+All baselines score predictions with the shared fuzzy function matcher and
+metrics in `utils/` (hit@k, recall@k, MRR, mAP), so results are directly
+comparable across families.
+
+## Data & external dependencies
+
+The constructed benchmark (CVE records, commit chains, ground-truth functions)
+and the precomputed retrieval corpora are **not** included here because of size;
+they are released as a separate archive (see the paper's data-availability
+statement). The dataset can also be regenerated from scratch by running
+`data_processing/` in order against the public sources.
+
+Two large external dependencies must be obtained separately:
+
+- a local clone of the target project (e.g. Chromium) for the agentic baselines
+  — pass its path via `--repo-path`;
+- the dense retriever checkpoint (`CodeRankEmbed`) for `iii_b` — downloadable
+  from its public model hub.
 
 ## Setup
 
@@ -60,25 +94,17 @@ pip install -r requirements.txt
 python -m playwright install chromium   # only for the issue-tracker scraping stage
 ```
 
-The GumTree AST-diff tool builds with Gradle:
-
-```bash
-cd data_processing/gumtree_differ && ./gradlew build
-```
-
 ## Running
 
-Each script is self-documenting via `--help` and a module-level docstring.
-Typical evaluation entry points:
+Every script is self-documenting via `--help`. Typical entry points:
 
 ```bash
-# code-retrieval baseline (BM25)
+# benchmark construction — run stages in order
+python data_processing/01_download_from_mitre_nvd.py --help
+
+# evaluation — precompute once, then run a baseline
+python evaluation/precompute/build_splits.py --help
 python evaluation/scripts/iii_a_bm25.py --help
-
-# agentic baseline (zero-shot)
-python evaluation/scripts/iv_a_agent.py --repo-path <project-clone> --help
-
-# agentic baseline with in-context historical-CVE retrieval
 python evaluation/scripts/iv_b_agent_icl.py --repo-path <project-clone> --help
 ```
 

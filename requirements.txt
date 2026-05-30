@@ -1,34 +1,32 @@
 # PrismVul — Python dependencies
-#
-# Core data processing + evaluation
+
+# Core (numeric / ML baselines + shared utils)
 numpy
 scipy
 scikit-learn
-pandas
 tqdm
+colorama
+
+# Data pipeline: scraping + HTTP
 requests
 aiohttp
 beautifulsoup4
-colorama
-jinja2
-matplotlib
+playwright
 
-# Retrieval baselines
-rank-bm25
+# LLM clients (CVE-description NLP stages + agentic baselines)
+anthropic
+openai
 
-# Code parsing (data pipeline + corpus building)
+# Code parsing (C/C++ function extraction)
 tree-sitter
 tree-sitter-cpp
 
 # Agentic baselines (zero-shot + in-context retrieval) — LLM agent over a git worktree
 mini-swe-agent
-openai
+litellm
+jinja2
 
-# Dense retriever + LoRA reranker fine-tuning
+# Dense code-retrieval baseline (CodeRankEmbed)
 torch
 transformers
-datasets
-peft
-
-# Issue-tracker scraping (data pipeline only)
-playwright
+accelerate
