@@ -1,0 +1,136 @@
+HISTORICAL CVE CORPUS (filesystem RAG, read-only)
+
+A directory of historical Chromium CVEs (train + val splits only — the test
+split is excluded, no leakage) is mounted at:
+
+    {{ rag_corpus_dir }}
+
+It is NOT part of the chromium checkout. You can `cat`, `grep`, `ls`, `find`,
+`jq` it from anywhere; you don't need to leave the worktree.
+
+WHEN TO USE IT
+  - Early: get a feel for what kinds of bugs show up in this module / CWE class
+    before doing heavy grep in the worktree.
+  - When stuck: if blind grep returns nothing, look at where past CVEs in the
+    same area pointed to and re-target your search.
+  - Late: sanity-check your candidate function — does its shape match
+    historical root-cause functions for this CWE?
+
+WHAT'S IN IT (see {{ rag_corpus_dir }}/README.txt for the full guide)
+  INDEX.txt              one line per CVE: cve_id | cwe | top-module(s) | summary
+  full/<CVE-ID>.json     canonical record (issue text + GT vulnerable_functions
+                         with body_pre_fix / body_post_fix)
+  by_cwe/<CWE-XXX>/      symlinks grouped by CWE id
+  by_module/<a/b>/       symlinks grouped by top-2 path segments of GT files
+
+USEFUL ONE-LINERS (all paths absolute)
+  grep -i "use after free" {{ rag_corpus_dir }}/INDEX.txt | head
+  ls {{ rag_corpus_dir }}/by_cwe/CWE-416/ | head
+  ls {{ rag_corpus_dir }}/by_module/third_party/blink/ 2>/dev/null | head
+  cat {{ rag_corpus_dir }}/full/CVE-2022-XXXX.json | jq .vulnerable_functions
+  # When studying a past CVE, look at ALL of its vulnerable_functions, not
+  # only the first one — past CVEs in this corpus typically span several
+  # related functions each. The shape "multiple related functions" is the rule, not
+  # the exception, and learning that shape is most of the value of RAG.
+
+COVERAGE — find ALL related vulnerable functions, not only the first hit
+  Empirically, past Chromium CVEs in this corpus usually patch several related
+  functions, and **patching more than one is the common case**. If your final submission
+  has only 1 function, you are almost certainly missing siblings — go look
+  for them BEFORE you submit.
+
+  ── Pair-finding playbook (the bucket you most often miss) ─────────────
+  Once you have your first candidate, ask "what is its pair?". Most vuln
+  classes have a canonical pair shape:
+
+    • Use-after-free / dangling pointer (CWE-416):
+        destruction site (dtor, Reset, ResetWeakPtrs, Stop, Close…)
+        + every site that may run AFTER destruction:
+          - posted task / callback (PostTask, BindOnce, BindRepeating)
+          - observer / listener handlers
+          - mojo / IPC message handlers
+          - timer / async-resolve completions
+        → grep the same file for `BindOnce|PostTask|AddObserver|OnceCallback`
+          and check whether each captured `this`/raw pointer can outlive the
+          owner.
+
+    • Check-then-use (TOCTOU, missing validation, CWE-20 / CWE-787 / CWE-125):
+        the function that does the check
+        + every function that performs the use (and may be reached without
+          having gone through the check).
+        → grep for callers of the "use" function across the module.
+
+    • Read/write race (CWE-362):
+        the read path + the write path. Often live in different files
+        (renderer reads, browser writes, etc.).
+
+    • Producer/consumer of corrupted state (type confusion CWE-843,
+       integer-overflow-then-alloc CWE-190/191):
+        the producer that creates / sizes the object
+        + every consumer that interprets / iterates it.
+
+    • IPC / Mojo boundary bugs:
+        the Mojo interface impl on the trusted side
+        + any helper that processes attributes coming over the wire without
+        re-validating them.
+
+  ── Mechanics ──────────────────────────────────────────────────────────
+  After locating your first solid candidate, do NOT submit yet. Continue:
+    1. cat the file, scan caller / callee / sibling methods in the same class
+    2. cat the matching header for related helpers, virtual overrides
+    3. re-run a targeted grep on the symbols you just discovered (the names
+       of the field, the callback type, the IPC method, etc.)
+    4. in this RAG corpus, look up the *full* vulnerable_functions list of
+       1-2 historically similar CVEs (`jq .vulnerable_functions
+       full/<id>.json`). If those CVEs patched multiple functions across several files, your
+       CVE almost certainly needs a similarly broad fix.
+
+  ── Quantity guidance (MANDATORY — overrides system-prompt defaults) ───
+  Submit AT LEAST 10 candidate functions in your final answer, ranked by your
+  confidence (highest first). This overrides the system-prompt phrasing
+  "one is fine if you're confident" — for this experiment, fewer than 10 is
+  unacceptable. If your investigation has surfaced more than 10 plausible
+  candidates, submit them all (no upper limit) — just keep the strict
+  confidence ordering.
+
+  How to fill the first 10 slots (and any additional ones) responsibly:
+    • Slot 1:    your single most-confident candidate (drives hit@1 / precision@1)
+    • Slots 2-3: tight siblings of slot 1 — its caller, callee, paired
+                 destruction/use site, paired check/use site, paired
+                 read/write side. (Use the Pair-finding playbook above.)
+    • Slots 4-6: secondary candidates discovered during exploration that
+                 plausibly participate in the bug chain (helpers, factory
+                 callsites, virtual overrides, observer registrations).
+    • Slots 7-10: weaker but still plausible candidates — same-file
+                 functions whose name / signature / role suggests they
+                 might be involved even if you have no direct evidence
+                 (e.g. other handlers in the same dispatcher, other
+                 callbacks in the same async chain).
+    • Slots 11+: only add these if your investigation surfaced additional
+                 functions you have *real evidence* could be involved
+                 (e.g. another file in the same call graph patched in a
+                 historical CVE of the same shape). Don't pad past 10 with
+                 weaker noise — the bottom-of-list slots only help if they
+                 stay plausible.
+
+  All entries must be REAL functions you've confirmed exist in the current
+  worktree (verified via `cat` / `grep` of their definition). Padding with
+  hallucinated names is worse than submitting a real function with low
+  confidence — fabricated entries cost step-budget audit trust and are
+  rejected by the runtime if they can't be found.
+
+  Rationale: GT sizes in this benchmark vary widely, with a heavy tail. A ≥10-slot list lets a single submission compete on both
+  precision-heavy metrics (hit@1, MRR) AND recall-heavy metrics (recall@10,
+  mAP) without trade-off — the bottom-of-list slots cost very little
+  precision but raise recall ceilings substantially. For the largest CVEs in
+  the tail, going past 10 can be a real win, so don't
+  artificially cap yourself when evidence supports more.
+
+IMPORTANT — these are HINTS, not answers.
+  - The corpus is at a different point in chromium history. File paths and
+    function names have likely changed since.
+  - Past CVEs in the same module / CWE can suggest *what to look for*, but the
+    actual vulnerable function for the current CVE must be located + verified
+    in the worktree.
+  - Never submit a function from the corpus directly. Submit only functions
+    you have confirmed exist (with the right signature) in the current checkout.

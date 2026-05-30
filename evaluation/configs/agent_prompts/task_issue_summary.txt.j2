@@ -1,0 +1,11 @@
+CVE ID: {{ cve_id }}
+
+VULNERABILITY DESCRIPTION (from bug reports):
+{% for summary in issue_summaries %}
+[Issue {{ loop.index }}] {{ summary }}
+{% endfor %}
+{% if not issue_summaries %}
+(No issue summaries available)
+{% endif %}
+
+Find the C/C++ functions in this codebase that contain the root cause of this vulnerability. The codebase is checked out at the vulnerable version (before the fix).
